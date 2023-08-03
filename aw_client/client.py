@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import socket
+import getpass
 import threading
 from collections import namedtuple
 from datetime import datetime
@@ -80,6 +81,7 @@ class ActivityWatchClient:
         self.testing = testing
 
         self.client_name = client_name
+        self.client_username = getpass.getuser()
         self.client_hostname = socket.gethostname()
 
         _config = load_config()
@@ -277,6 +279,7 @@ class ActivityWatchClient:
             data = {
                 "client": self.client_name,
                 "hostname": self.client_hostname,
+                "name" : self.client_username,
                 "type": event_type,
             }
             self._post(endpoint, data)
