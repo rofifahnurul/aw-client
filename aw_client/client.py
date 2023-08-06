@@ -18,6 +18,7 @@ from typing import (
     Union,
 )
 
+import requests
 import persistqueue
 import requests as req
 from aw_core.dirs import get_data_dir
@@ -58,6 +59,64 @@ def always_raise_for_request_errors(f: Callable[..., req.Response]):
 
     return g
 
+def check_file(hostname,server):
+    file_path = "required_file.txt" 
+    if os.path.exists(file_path):
+        # If the file exists, open it and read its contents
+        with open(file_path, "r") as file:
+            token = file.read()
+            return token
+
+    else:
+        # If the file is missing, create a new file and send the registration request
+        data = {
+            "hostname": hostname,
+            # Add other registration fields as needed
+        }
+        '''
+        try:
+            with open(file_path, "w") as file:
+                file.write(hostname)  # Write the username to the file
+            print("New file created and registration successful!")
+        except Exception as e:
+            print("Failed to create a new file:", e)
+        '''
+        try:
+            headers = {"Content-Type": "application/json"}
+            response = requests.post(server, json=data, headers=headers)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            response_data = response.json()  # Parse the JSON response data
+            #print("CLIENT Response received data:", response_data)
+            # You can access specific fields from the response_data dictionary if needed
+            message = response_data.get("message")
+            hostname = response_data.get("hostname")
+            token= response_data.get("token")
+
+            with open(file_path, "w") as file:
+                file.write(token)
+
+            return token
+            
+        except requests.exceptions.RequestException as e:
+            print("Failed to register:", e)
+
+def run_check_file(func):
+    @functools.wraps(func)
+    def wrapper(self, *args, headers=None, **kwargs):
+        default_headers = {"Content-type": "application/json", "charset": "utf-8"}
+        token = check_file(self.client_hostname, "http://127.0.0.1:5600/register")
+        if token:
+            default_headers["Authorization"] = token
+        # Merge the default headers with the headers provided as an argument
+        #print("\n Token:",token)
+        final_headers = default_headers.copy()
+        if headers is not None:
+            final_headers.update(headers)
+
+        # Call the function with the updated headers, without changing the argument name
+        return func(self, *args, headers=final_headers, **kwargs)
+    return wrapper
+
 
 class ActivityWatchClient:
     def __init__(
@@ -78,6 +137,7 @@ class ActivityWatchClient:
         .. literalinclude:: examples/client.py
             :lines: 7-
         """
+        
         self.testing = testing
 
         self.client_name = client_name
@@ -93,7 +153,7 @@ class ActivityWatchClient:
         self.server_address = "{protocol}://{host}:{port}".format(
             protocol=protocol, host=server_host, port=server_port
         )
-
+        check_file(self.client_hostname, "http://127.0.0.1:5600/register")
         self.instance = SingleInstance(
             f"{self.client_name}-at-{server_host}-on-{server_port}"
         )
@@ -111,28 +171,46 @@ class ActivityWatchClient:
     def _url(self, endpoint: str):
         return f"{self.server_address}/api/0/{endpoint}"
 
+    @run_check_file
     @always_raise_for_request_errors
-    def _get(self, endpoint: str, params: Optional[dict] = None) -> req.Response:
-        return req.get(self._url(endpoint), params=params)
+    def _get(self, endpoint: str, params: Optional[dict] = None, headers=None) -> req.Response:
+        #print("HEADERS GET",headers)
+        return req.get(self._url(endpoint), params=params, headers=headers)
 
+    @run_check_file
     @always_raise_for_request_errors
     def _post(
         self,
         endpoint: str,
         data: Union[List[Any], Dict[str, Any]],
         params: Optional[dict] = None,
+        headers=str,
     ) -> req.Response:
-        headers = {"Content-type": "application/json", "charset": "utf-8"}
-        return req.post(
+        #headers = {"Content-type": "application/json", "charset": "utf-8", "Authorization":token}
+        # print("POST Request:")
+        # print("Endpoint:", self._url(endpoint))
+        print("Data:", data)
+        print("Headers:", headers)
+        # print("Params:", params)
+        # print("HEADERS POST",headers)
+        response = req.post(
             self._url(endpoint),
             data=bytes(json.dumps(data), "utf8"),
             headers=headers,
             params=params,
         )
+        # print("Response:")
+        # print("Status Code:", response.status_code)
+        # print("Response Headers:", response.headers)
+        # print("Response Content:", response.text)
+        return response
 
+    @run_check_file
     @always_raise_for_request_errors
-    def _delete(self, endpoint: str, data: Any = dict()) -> req.Response:
-        headers = {"Content-type": "application/json"}
+    def _delete(self, endpoint: str, data: Any = dict(), headers=None) -> req.Response:
+        if headers is None:
+            headers = {}
+        #print("HEADERS DELETE",headers)
         return req.delete(self._url(endpoint), data=json.dumps(data), headers=headers)
 
     def get_info(self):
@@ -234,12 +312,16 @@ class ActivityWatchClient:
 
         from aw_transform.heartbeats import heartbeat_merge
 
+        # print("queued: ",queued)
         endpoint = f"buckets/{bucket_id}/heartbeat?pulsetime={pulsetime}"
         _commit_interval = commit_interval or self.commit_interval
 
+        # print("bucket_id: ",bucket_id)
+        # print("pulsetime: ",pulsetime)
         if queued:
             # Pre-merge heartbeats
             if bucket_id not in self.last_heartbeat:
+                # print("if bucket_id not in self.last_heartbeat")
                 self.last_heartbeat[bucket_id] = event
                 return None
 
@@ -251,17 +333,23 @@ class ActivityWatchClient:
                 # If last_heartbeat becomes longer than commit_interval
                 # then commit, else cache merged.
                 diff = (last_heartbeat.duration).total_seconds()
+                # print("Time Difference:", diff)
+
                 if diff >= _commit_interval:
                     data = merge.to_json_dict()
+                    #print("Merged Heartbeat to be committed:", data)
                     self.request_queue.add_request(endpoint, data)
                     self.last_heartbeat[bucket_id] = event
                 else:
                     self.last_heartbeat[bucket_id] = merge
+                    # print("Merged Heartbeat cached:", merge)
             else:
                 data = last_heartbeat.to_json_dict()
+                # print("Last Heartbeat to be committed:", data)
                 self.request_queue.add_request(endpoint, data)
                 self.last_heartbeat[bucket_id] = event
         else:
+            # print("Not Queued. Posting heartbeat directly.")
             self._post(endpoint, event.to_json_dict())
 
     #
@@ -271,7 +359,8 @@ class ActivityWatchClient:
     def get_buckets(self) -> dict:
         return self._get("buckets/").json()
 
-    def create_bucket(self, bucket_id: str, event_type: str, queued=False):
+
+    def create_bucket(self, bucket_id: str, event_type: str, queued=False):        
         if queued:
             self.request_queue.register_bucket(bucket_id, event_type)
         else:
@@ -282,7 +371,9 @@ class ActivityWatchClient:
                 "name" : self.client_username,
                 "type": event_type,
             }
+            
             self._post(endpoint, data)
+            
 
     def delete_bucket(self, bucket_id: str, force: bool = False):
         self._delete(f"buckets/{bucket_id}" + ("?force=1" if force else ""))
@@ -513,6 +604,25 @@ class RequestQueue(threading.Thread):
             # Dispatch requests until connection is lost or thread should stop
             while self.connected and not self.should_stop():
                 self._dispatch_request()
+
+    # def _dispatch_request(self) -> None:
+    #     request = self._get_next()
+    #     if not request:
+    #         self.wait(0.2)  # seconds to wait before re-polling the empty queue
+    #         return
+
+    #     try:
+    #         self.client._post(request.endpoint, request.data)
+    #         # print("Request dispatched successfully:", request.endpoint, request.data)
+    #     except req.exceptions.ConnectTimeout:
+    #         # Rest of the code
+    #         return "Connection TimeOut"
+    #     except req.RequestException as e:
+    #         # Rest of the code
+    #         return "Request Exception"
+    #     except Exception:
+    #         # Rest of the code
+    #         return "Exception"
 
     def stop(self) -> None:
         self._stop_event.set()
