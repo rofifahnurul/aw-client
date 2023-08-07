@@ -17,7 +17,7 @@ from typing import (
     Tuple,
     Union,
 )
-
+import time
 import requests
 import persistqueue
 import requests as req
@@ -59,46 +59,64 @@ def always_raise_for_request_errors(f: Callable[..., req.Response]):
 
     return g
 
+def check_modification_time(file_path):
+    try:
+        six_days_in_seconds = 6 * 24 * 60 * 60
+        #six_days_in_seconds = 60
+        modified_time = os.path.getmtime(file_path)
+        current_time = time.time()
+        time_difference = current_time - modified_time
+
+        return time_difference >= six_days_in_seconds
+        
+    except OSError:
+        print(f"Error: Unable to get the modification time of the file '{file_path}'")
+        return None
+    
+def send_request_token(hostname,server,file_path):
+     # If the file is missing, create a new file and send the registration request
+    data = {
+        "hostname": hostname,
+        # Add other registration fields as needed
+    }
+       
+    try:
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(server, json=data, headers=headers)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        response_data = response.json()  # Parse the JSON response data
+        
+            # You can access specific fields from the response_data dictionary if needed
+            
+        hostname = response_data.get("hostname")
+        token= response_data.get("token")
+
+        with open(file_path, "w") as file:
+            file.write(token)
+        return token
+            
+    except requests.exceptions.RequestException as e:
+            print("Failed to register:", e)
+
 def check_file(hostname,server):
     file_path = "required_file.txt" 
+   
     if os.path.exists(file_path):
-        # If the file exists, open it and read its contents
-        with open(file_path, "r") as file:
-            token = file.read()
-            return token
+
+        modification_time = check_modification_time(file_path)
+        print("MODIFICATION TIME", modification_time)
+        if modification_time == True:
+            send_request_token(hostname,server,file_path)
+            print("MODIF TRUE RUN")
+        else:
+            # If the file exists, open it and read its contents
+            with open(file_path, "r") as file:
+                token = file.read()
+                return token
 
     else:
-        # If the file is missing, create a new file and send the registration request
-        data = {
-            "hostname": hostname,
-            # Add other registration fields as needed
-        }
-        '''
-        try:
-            with open(file_path, "w") as file:
-                file.write(hostname)  # Write the username to the file
-            print("New file created and registration successful!")
-        except Exception as e:
-            print("Failed to create a new file:", e)
-        '''
-        try:
-            headers = {"Content-Type": "application/json"}
-            response = requests.post(server, json=data, headers=headers)
-            response.raise_for_status()  # Raise an exception for HTTP errors
-            response_data = response.json()  # Parse the JSON response data
-            #print("CLIENT Response received data:", response_data)
-            # You can access specific fields from the response_data dictionary if needed
-            message = response_data.get("message")
-            hostname = response_data.get("hostname")
-            token= response_data.get("token")
-
-            with open(file_path, "w") as file:
-                file.write(token)
-
-            return token
-            
-        except requests.exceptions.RequestException as e:
-            print("Failed to register:", e)
+        send_request_token(hostname,server,file_path)
+       
 
 def run_check_file(func):
     @functools.wraps(func)
