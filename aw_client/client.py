@@ -122,7 +122,7 @@ def run_check_file(func):
     @functools.wraps(func)
     def wrapper(self, *args, headers=None, **kwargs):
         default_headers = {"Content-type": "application/json", "charset": "utf-8"}
-        token = check_file(self.client_hostname, "http://127.0.0.1:5600/register")
+        token = check_file(self.client_hostname, "http://{}:{}/register".format(server_host, server_port))
         if token:
             default_headers["Authorization"] = token
         # Merge the default headers with the headers provided as an argument
@@ -171,7 +171,7 @@ class ActivityWatchClient:
         self.server_address = "{protocol}://{host}:{port}".format(
             protocol=protocol, host=server_host, port=server_port
         )
-        check_file(self.client_hostname, "http://127.0.0.1:5600/register")
+        check_file(self.client_hostname, "http://{}:{}/register".format(server_host, server_port))
         self.instance = SingleInstance(
             f"{self.client_name}-at-{server_host}-on-{server_port}"
         )
